@@ -1,0 +1,281 @@
+```{r}
+library(caret)
+library(dplyr)
+library(pROC)
+```
+## Loading the Dataset
+
+```{r}
+#Using Local Dataset location
+data <- read.csv(file="C:/Users/palla/OnlineNewsPopularity.csv", header=TRUE, sep=",")
+```
+
+## Summary and structure before Data Preprocessing
+
+```{r}
+#summary before cleaning
+summary(data)
+str(data)
+```
+
+# Exploratory Data Analysis & Cleaning Data:
+
+
+```{r}
+#changing to data frame
+data <- data.frame(data)
+str(data)
+```
+
+```{r}
+##summary of the data 
+summary(data)
+```
+
+```{r}
+# Check for missing values
+missing_values <- colSums(is.na(data))
+print(missing_values)
+```
+
+
+```{r}
+# Summary statistics table
+summary_table <- summary(data)
+```
+
+```{r}
+
+# Outliers (Example with one continuous feature)
+outlier_check <- data %>%
+  ggplot(aes(x = shares)) +
+  geom_boxplot()
+
+# Threshold for identifying rare categories
+threshold <- 10  # Adjust the threshold as needed
+
+# Missing Values
+# Impute missing values for numerical features with mean
+data[, sapply(data, is.numeric)] <- lapply(data[, sapply(data, is.numeric)], function(x) ifelse(is.na(x), mean(x, na.rm = TRUE), x))
+
+# Impute missing values for categorical features with mode
+data[, sapply(data, is.factor)] <- lapply(data[, sapply(data, is.factor)], function(x) ifelse(is.na(x), levels(x)[which.max(table(x))], x))
+
+# Outliers
+# Winsorization for shares feature (replace extreme values with 1st and 99th percentiles)
+data$shares[data$shares < quantile(data$shares, 0.01)] <- quantile(data$shares, 0.01)
+data$shares[data$shares > quantile(data$shares, 0.99)] <- quantile(data$shares, 0.99)
+
+# Errors
+# Check if data_channel column exists
+if ("data_channel" %in% names(data)) {
+  # Identify categories with low frequency in data_channel
+  channel_counts <- table(data$data_channel)
+
+  # Identify categories to be grouped into "Other"
+  rare_channels <- names(channel_counts[channel_counts < threshold])
+
+  # Combine rare categories into "Other"
+  data$data_channel <- as.character(data$data_channel)
+  data$data_channel[data$data_channel %in% rare_channels] <- "Other"
+
+  # Convert data_channel back to factor with updated levels
+  data$data_channel <- factor(data$data_channel)
+}
+
+# Re-check data quality
+# Missing Values
+missing_values_after <- data %>%
+  summarise_all(~ sum(is.na(.)))
+
+# Outliers (updated)
+outlier_check_after <- data %>%
+  ggplot(aes(x = shares)) +
+  geom_boxplot()
+
+# Errors (updated)
+unique_values_after <- data %>%
+  summarise_all(~ n_distinct(.))
+
+# Display updated results
+print("Missing Values After Imputation:")
+print(missing_values_after)
+
+print("Outlier Check After Winsorization:")
+print(outlier_check_after)
+
+print("Unique Values After Error Correction:")
+print(unique_values_after)
+```
+
+```{r}
+# Calculate correlation matrix for numerical features
+correlation_matrix <- cor(data[, sapply(data, is.numeric)])
+
+# Visualize correlations using a heatmap
+heatmap(correlation_matrix,
+        col = colorRampPalette(c("navy", "white", "firebrick3"))(100),
+        scale = "none",
+        margins = c(5, 5))
+
+# Scatter plots for pairs of numerical features
+numerical_features <- c("n_tokens_title", "n_tokens_content", "num_hrefs", "num_imgs", "num_videos", "num_keywords", "shares")
+pairs(data[, numerical_features],
+      pch = 16,
+      col = "blue",
+      cex = 0.5)  # Decrease point size to fit more plots in the plotting area
+
+```
+
+```{r}
+# Dropping the 'url' variable and 'timedelta'
+data <- data[, -1]  # Drop 'url' variable
+data <- data[, -1]  # Drop 'timedelta'
+```
+
+```{r}
+library(ggplot2)
+
+# Visualize the feature of different day of week
+columns_day <- names(data)[30:36]
+unpop <- data[data$shares < 1400, ]
+pop <- data[data$shares >= 1400, ]
+unpop_day <- colSums(unpop[, columns_day])
+pop_day <- colSums(pop[, columns_day])
+
+df_freq <- data.frame(Class = c("Popular", "Non-popular"), Frequency = c(nrow(pop), nrow(unpop)))
+
+ggplot(df_freq, aes(x = Class, y = Frequency, fill = Class)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Frequency Distribution of Popular and Non-Popular Articles", x = "", y = "Frequency") +
+  theme(plot.title = element_text(size = 16, face = "bold"),
+        axis.text.x = element_text(size = 14),
+        axis.text.y = element_text(size = 14),
+        axis.title = element_text(size = 14, face = "bold"))
+
+```
+
+
+
+```{r}
+# Create a data frame with the day columns, popular counts, and unpopular counts
+df_day_counts <- data.frame(
+  Day = columns_day,
+  Popular = pop_day,
+  Unpopular = unpop_day
+)
+
+# Convert the data frame to long format
+df_day_counts_long <- tidyr::pivot_longer(df_day_counts, cols = c("Popular", "Unpopular"), names_to = "Category", values_to = "Count")
+
+# Create the grouped bar plot
+ggplot(df_day_counts_long, aes(x = Day, y = Count, fill = Category)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  labs(title = "Count of popular/unpopular news over different day of week", x = "Days of week", y = "Count") + 
+  theme(plot.title = element_text(size = 16)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  theme(axis.title = element_text(size = 12)) + 
+  scale_fill_manual(values = c("red", "blue"), labels = c("popular", "unpopular")) + 
+  guides(fill = guide_legend(title = NULL))  
+```
+```{r}
+library(ggplot2)
+
+# Visualize the feature of different article category
+columns_chan <- names(data)[12:17]
+unpop_chan <- colSums(unpop[, columns_chan])
+pop_chan <- colSums(pop[, columns_chan])
+
+# Create a data frame for the grouped bar plot
+df_grouped <- data.frame(category = columns_chan,
+                         popular = pop_chan,
+                         unpopular = unpop_chan)
+
+# convert the data frame to long format
+df_channel <- tidyr::pivot_longer(df_grouped, cols = c("popular", "unpopular"), names_to = "Category", values_to = "Count")
+
+# create the grouped bar plot
+ggplot(df_channel, aes(x = category, y = Count, fill = Category)) +
+  geom_bar(position = "dodge", stat = "identity") +
+  labs(title = "Count of popular/unpopular news over different channels", x = "Different channels", y = "Count") + 
+  theme(plot.title = element_text(size = 16)) + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) + 
+  theme(axis.title = element_text(size = 12)) + 
+  scale_fill_manual(values = c("green", "orange"), labels = c("popular", "unpopular")) + 
+  guides(fill = guide_legend(title = NULL))  
+ 
+```
+
+
+```{r}
+# Set seed for reproducibility
+set.seed(1)
+
+# Define train/test split
+ind <- sample(nrow(data), nrow(data) * 0.8)
+train <- data[ind, ]
+test <- data[-ind, ]
+```
+
+# Regression Model
+
+```{r}
+# Load libraries
+library(randomForest)
+library(gbm)
+
+# Number of trees
+B <- 10 
+
+# Initialize matrices for predictions
+pred_rf <- matrix(NA, nrow(train), B)
+pred_gbm <- matrix(NA, nrow(train), B)
+pred_lm <- matrix(NA, nrow(train), B)
+
+# Loop for bagging
+for(i in 1:B) {  
+  set.seed(i)  # Set seed to make it reproducible
+  idx <- sample(nrow(train), nrow(train), replace = TRUE)  # Sampling with replacement
+  oob_idx <- setdiff(1:nrow(train), idx)
+  dt <- train[idx, ]  # Subset of training data
+  oob <- train[oob_idx, ]
+  
+  # Build Random Forest model
+  rf_B <- randomForest(shares ~ ., data = dt, ntree = 500)  # Assuming 'shares' is the response variable
+  # Predict values
+  pred_rf[oob_idx, i] <- predict(rf_B, oob)
+  
+  # Build Gradient Boosting Machine model
+  gbm_B <- gbm(shares ~ ., data = dt, n.trees = 500, distribution = "gaussian")  # Assuming 'shares' is the response variable
+  # Predict values
+  pred_gbm[oob_idx, i] <- predict(gbm_B, oob)
+  
+  # Build Linear Regression model
+  lm_B <- lm(shares ~ ., data = dt)  # Assuming 'shares' is the response variable
+  # Predict values
+  pred_lm[oob_idx, i] <- predict(lm_B, oob)
+}
+
+# Calculate Root Mean Squared Percentage Error (RMSPE) for each model
+rmspe_rf <- sqrt(mean(((train$shares - rowMeans(pred_rf, na.rm = TRUE)) / train$shares)^2)) * 100
+rmspe_gbm <- sqrt(mean(((train$shares - rowMeans(pred_gbm, na.rm = TRUE)) / train$shares)^2)) * 100
+rmspe_lm <- sqrt(mean(((train$shares - rowMeans(pred_lm, na.rm = TRUE)) / train$shares)^2)) * 100
+
+# Print RMSPE for each model
+print("RMSPE for Random Forest Regression:")
+print(rmspe_rf)
+print("RMSPE for Gradient Boosting Regression:")
+print(rmspe_gbm)
+print("RMSPE for Linear Regression:")
+print(rmspe_lm)
+
+# Compare with benchmark (Linear Regression)
+benchmark_lm <- lm(shares ~ ., data = train)  # Benchmark Linear Regression model
+rmspe_benchmark_lm <- sqrt(mean(((train$shares - predict(benchmark_lm, train)) / train$shares)^2)) * 100
+print("RMSPE for Benchmark Linear Regression:")
+print(rmspe_benchmark_lm)
+
+
+```
+
+
